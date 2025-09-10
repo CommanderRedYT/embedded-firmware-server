@@ -67,6 +67,7 @@ const command = new commander.Command();
 command
     .option('--reset-db', 'Reset the database (deletes all data)')
     .option('--create-api-key <project_id>', 'Create a new API key for the specified project ID')
+    .option('--get-api-keys', 'List all API keys')
     .parse(process.argv);
 
 const options = command.opts();
@@ -94,6 +95,19 @@ if (options.createApiKey) {
                 console.error('Error creating API key:', err.message);
             }
         }
+    }
+    process.exit(0);
+}
+
+if (options.getApiKeys) {
+    const stmt = db.prepare('SELECT project_id, api_key FROM api_keys');
+    const rows = stmt.all() as { project_id: string; api_key: string }[];
+    if (rows.length === 0) {
+        console.log('No API keys found.');
+    } else {
+        rows.forEach(row => {
+            console.log(`Project ID: ${row.project_id}, API Key: ${row.api_key}`);
+        });
     }
     process.exit(0);
 }
