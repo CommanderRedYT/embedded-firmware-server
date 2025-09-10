@@ -67,7 +67,7 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
     if (!currentHash) return true;
 
     // if currentHash is not in our database, return false
-    const stmt = db.prepare('SELECT COUNT(*) as count FROM firmware WHERE file_path = ? AND project_id = ?');
+    const stmt = db.prepare('SELECT COUNT(*) as count FROM firmware WHERE version = ? AND project_id = ?');
     const row = stmt.get(currentHash, project_id) as { count: number };
 
     if (row.count === 0) {
