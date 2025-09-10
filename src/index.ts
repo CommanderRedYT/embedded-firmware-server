@@ -68,6 +68,9 @@ command
     .option('--reset-db', 'Reset the database (deletes all data)')
     .option('--create-api-key <project_id>', 'Create a new API key for the specified project ID')
     .option('--get-api-keys', 'List all API keys')
+    .option('--get-firmware <project_id> <device_type>', 'Get latest firmware for a specific project and device type')
+    .option('--list-firmwares <project_id>', 'List all firmware entries for a specific project')
+    .description('Firmware Management Server')
     .parse(process.argv);
 
 const options = command.opts();
@@ -107,6 +110,55 @@ if (options.getApiKeys) {
     } else {
         rows.forEach(row => {
             console.log(`Project ID: ${row.project_id}, API Key: ${row.api_key}`);
+        });
+    }
+    process.exit(0);
+}
+
+if (options.getFirmware) {
+    const [projectId, deviceType] = options.getFirmware;
+    const stmt = db.prepare(`
+        SELECT * FROM firmware 
+        WHERE project_id = ? AND device_type = ? 
+        ORDER BY upload_date DESC 
+        LIMIT 1
+    `);
+    const firmware = stmt.get(projectId, deviceType) as {
+        id: number;
+        project_id: string;
+        device_type: string;
+        version: string;
+        upload_date: string;
+    } | undefined;
+
+    if (!firmware) {
+        console.log('No firmware found for the specified project and device type.');
+    } else {
+        console.log(`ID: ${firmware.id}`);
+        console.log(`Project ID: ${firmware.project_id}`);
+        console.log(`Device Type: ${firmware.device_type}`);
+        console.log(`Version: ${firmware.version}`);
+        console.log(`Upload Date: ${firmware.upload_date}`);
+    }
+    process.exit(0);
+}
+
+if (options.listFirmwares) {
+    const projectId = options.listFirmwares;
+    const stmt = db.prepare('SELECT * FROM firmware WHERE project_id = ? ORDER BY upload_date DESC');
+    const firmwares = stmt.all(projectId) as {
+        id: number;
+        project_id: string;
+        device_type: string;
+        version: string;
+        upload_date: string;
+    }[];
+
+    if (firmwares.length === 0) {
+        console.log('No firmware entries found for the specified project.');
+    } else {
+        firmwares.forEach(firmware => {
+            console.log(`ID: ${firmware.id}, Device Type: ${firmware.device_type}, Version: ${firmware.version}, Upload Date: ${firmware.upload_date}`);
         });
     }
     process.exit(0);
