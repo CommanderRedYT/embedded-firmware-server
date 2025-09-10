@@ -71,6 +71,7 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
     const row = stmt.get(currentHash, project_id) as { count: number };
 
     if (row.count === 0) {
+        console.warn('Current firmware hash not found in database for project:', project_id);
         return false;
     }
 
@@ -79,10 +80,15 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
     const latestRow = latestStmt.get(project_id) as { file_path: string } | undefined;
 
     if (!latestRow) {
+        console.warn('No firmware found in database for project:', project_id);
         return false;
     }
 
-    return latestRow.file_path !== currentHash;
+    const isSame = latestRow.file_path === currentHash;
+
+    console.log(`Comparing firmware hashes: current=${currentHash}, latest=${latestRow.file_path}, isSame=${isSame}`);
+
+    return !isSame;
 }
 
 // Add command-line option for database reset and creating a new API key
