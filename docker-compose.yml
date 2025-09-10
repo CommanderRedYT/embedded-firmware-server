@@ -1,0 +1,10 @@
+name: firmware-server
+services:
+  firmware-server:
+    image: ghcr.io/commanderredyt/embedded-firmware-server:latest
+    container_name: embedded-firmware-server
+    restart: always
+    environment:
+      - PORT=5656 # change if needed
+    volumes:
+      - ./data:/app/data
