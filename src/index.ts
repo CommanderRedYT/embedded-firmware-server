@@ -5,6 +5,7 @@ import fs from 'fs';
 import Database from 'better-sqlite3';
 import commander from 'commander';
 import crypto from 'crypto';
+import morgan from 'morgan';
 
 /*
  * ==== API Routes ====
@@ -20,6 +21,8 @@ import crypto from 'crypto';
 const app = express();
 app.set('trust proxy', true);
 app.disable('x-powered-by');
+
+app.use(morgan('combined'));
 
 const HOST = process.env.HOST || 'localhost';
 const PORT = parseInt(process.env.PORT || '3000');
