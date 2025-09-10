@@ -6,4 +6,4 @@ if [ -z "$ARGS" ]; then
   ARGS="--help"
 fi
 
-docker-compose -f docker-compose.yml exec firmware-server /bin/sh -c "cd /app && tsx src/index.ts $ARGS"
+docker-compose -f docker-compose.yml exec firmware-server /bin/sh -c "cd /app && node_modules/.bin/tsx src/index.ts $ARGS"
