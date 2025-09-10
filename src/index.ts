@@ -76,17 +76,17 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
     }
 
     // Get the hash of the latest firmware
-    const latestStmt = db.prepare('SELECT file_path FROM firmware WHERE project_id = ? ORDER BY upload_date DESC LIMIT 1');
-    const latestRow = latestStmt.get(project_id) as { file_path: string } | undefined;
+    const latestStmt = db.prepare('SELECT version FROM firmware WHERE project_id = ? ORDER BY upload_date DESC LIMIT 1');
+    const latestRow = latestStmt.get(project_id) as { version: string } | undefined;
 
     if (!latestRow) {
         console.warn('No firmware found in database for project:', project_id);
         return false;
     }
 
-    const isSame = latestRow.file_path === currentHash;
+    const isSame = latestRow.version === currentHash;
 
-    console.log(`Comparing firmware hashes: current=${currentHash}, latest=${latestRow.file_path}, isSame=${isSame}`);
+    console.log(`Comparing firmware hashes: current=${currentHash}, latest=${latestRow.version}, isSame=${isSame}`);
 
     return !isSame;
 }
