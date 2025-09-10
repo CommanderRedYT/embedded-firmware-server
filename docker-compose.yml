@@ -6,5 +6,7 @@ services:
     restart: always
     environment:
       - PORT=5656 # change if needed
+    ports:
+      - 127.0.0.1:5656:5656 # change if needed
     volumes:
       - ./data:/app/data
