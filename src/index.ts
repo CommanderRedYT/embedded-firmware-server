@@ -100,6 +100,10 @@ command
     .option('--get-api-keys', 'List all API keys')
     .option('--get-firmware <project_id> <device_type>', 'Get latest firmware for a specific project and device type')
     .option('--list-firmwares <project_id>', 'List all firmware entries for a specific project')
+    .option('--delete-api-key <project_id>', 'Delete the API key for the specified project ID')
+    .option('--delete-firmware <firmware_id>', 'Delete the firmware entry with the specified ID')
+    .option('--cleanup-upload-dir', 'Delete all files in the uploads directory that are not referenced in the database')
+    .option('--prune-old-firmwares <days>', 'Delete firmware entries older than the specified number of days')
     .description('Firmware Management Server')
     .parse(process.argv);
 
@@ -191,6 +195,101 @@ if (options.listFirmwares) {
             console.log(`ID: ${firmware.id}, Device Type: ${firmware.device_type}, Version: ${firmware.version}, Upload Date: ${firmware.upload_date}`);
         });
     }
+    process.exit(0);
+}
+
+if (options.deleteApiKey) {
+    const projectId = options.deleteApiKey;
+    const del = db.prepare('DELETE FROM api_keys WHERE project_id = ?');
+    const result = del.run(projectId);
+    if (result.changes === 0) {
+        console.log(`No API key found for project ID "${projectId}".`);
+    } else {
+        console.log(`API key for project ID "${projectId}" has been deleted.`);
+    }
+    process.exit(0);
+}
+
+if (options.deleteFirmware) {
+    const firmwareId = options.deleteFirmware;
+    const getStmt = db.prepare('SELECT file_path FROM firmware WHERE id = ?');
+    const firmware = getStmt.get(firmwareId) as { file_path: string } | undefined;
+
+    if (!firmware) {
+        console.log(`No firmware entry found with ID "${firmwareId}".`);
+        process.exit(0);
+    }
+
+    const del = db.prepare('DELETE FROM firmware WHERE id = ?');
+    const result = del.run(firmwareId);
+    if (result.changes > 0) {
+        // Delete the associated file
+        fs.unlink(firmware.file_path, err => {
+            if (err) {
+                console.error('Error deleting firmware file:', err.message);
+            } else {
+                console.log('Associated firmware file deleted.');
+            }
+        });
+        console.log(`Firmware entry with ID "${firmwareId}" has been deleted.`);
+    } else {
+        console.log(`No firmware entry found with ID "${firmwareId}".`);
+    }
+    process.exit(0);
+}
+
+if (options.cleanupUploadDir) {
+    const stmt = db.prepare('SELECT file_path FROM firmware');
+    const rows = stmt.all() as { file_path: string }[];
+    const validFiles = new Set(rows.map(row => path.resolve(row.file_path)));
+
+    const files = fs.readdirSync(uploadDir);
+    let deletedCount = 0;
+
+    for (const file of files) {
+        const filePath = path.resolve(path.join(uploadDir, file));
+        if (!validFiles.has(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`Deleted unreferenced file: ${filePath}`);
+            deletedCount++;
+        }
+    }
+
+    console.log(`Cleanup complete. Deleted ${deletedCount} unreferenced files.`);
+    process.exit(0);
+}
+
+if (options.pruneOldFirmwares) {
+    const days = parseInt(options.pruneOldFirmwares);
+    if (isNaN(days) || days <= 0) {
+        console.error('Please provide a valid number of days.');
+        process.exit(1);
+    }
+
+    const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const getStmt = db.prepare('SELECT id, file_path FROM firmware WHERE upload_date < ?');
+    const oldFirmwares = getStmt.all(cutoffDate) as { id: number; file_path: string }[];
+
+    const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
+    let deletedCount = 0;
+
+    for (const firmware of oldFirmwares) {
+        const result = delStmt.run(firmware.id);
+        if (result.changes > 0) {
+            // Delete the associated file
+            fs.unlink(firmware.file_path, err => {
+                if (err) {
+                    console.error('Error deleting firmware file:', err.message);
+                } else {
+                    console.log(`Deleted firmware file: ${firmware.file_path}`);
+                }
+            });
+            deletedCount++;
+        }
+    }
+
+    console.log(`Pruned ${deletedCount} firmware entries older than ${days} days.`);
     process.exit(0);
 }
 
