@@ -63,6 +63,27 @@ const setupDatabase = () => {
 
 setupDatabase();
 
+const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
+    if (!currentHash) return true;
+
+    // if currentHash is not in our database, return false
+    const stmt = db.prepare('SELECT COUNT(*) as count FROM firmware WHERE file_path = ? AND project_id = ?');
+    const row = stmt.get(currentHash, project_id) as { count: number };
+
+    if (row.count === 0) {
+        return false;
+    }
+
+    // Get the hash of the latest firmware
+    const latestStmt = db.prepare('SELECT file_path FROM firmware WHERE project_id = ? ORDER BY upload_date DESC LIMIT 1');
+    const latestRow = latestStmt.get(project_id) as { file_path: string } | undefined;
+
+    if (!latestRow) {
+        return false;
+    }
+
+    return latestRow.file_path !== currentHash;
+}
 
 // Add command-line option for database reset and creating a new API key
 const command = new commander.Command();
@@ -223,6 +244,21 @@ app.post('/api/v1/firmware', authenticate, upload.single('firmware'), (req: Expr
     res.status(201).json({message: 'Firmware uploaded successfully'});
 });
 
+const doFileDownload = (id: string, projectId: string, res: express.Response) => {
+    const stmt = db.prepare('SELECT * FROM firmware WHERE id = ? AND project_id = ?');
+    const firmware = stmt.get(id, projectId) as { file_path: string } | undefined;
+
+    if (!firmware) {
+        return res.status(404).json({error: 'Firmware not found'});
+    }
+
+    res.download(firmware.file_path, err => {
+        if (err) {
+            res.status(500).json({error: 'Error downloading file'});
+        }
+    });
+}
+
 // Route to get latest firmware
 app.get('/api/v1/firmware/latest', authenticate, (req: ExpressRequestWithProjectId, res) => {
     const {device_type} = req.query;
@@ -230,6 +266,10 @@ app.get('/api/v1/firmware/latest', authenticate, (req: ExpressRequestWithProject
 
     if (!device_type) {
         return res.status(400).json({error: 'device_type is required'});
+    }
+
+    if (!projectId) {
+        return res.status(500).json({error: 'Project ID not found in request'});
     }
 
     const stmt = db.prepare(`
@@ -256,7 +296,15 @@ app.get('/api/v1/firmware/latest', authenticate, (req: ExpressRequestWithProject
     // if it exists, directly download the file
     if (xEsp32Version) {
         console.log(`Device with version ${xEsp32Version} is downloading firmware ID ${firmware.id}`);
-        return res.redirect(`/api/v1/firmware/download/${firmware.id}`);
+        const isNewer = hasNewerFirmware(xEsp32Version, projectId);
+        if (!isNewer) {
+            console.log(`Device firmware is up to date (version: ${xEsp32Version}). Sending 304 Not Modified.`);
+            return res.status(304).end();
+        }
+
+        console.log(`Device firmware is outdated (current: ${xEsp32Version}, latest: ${firmware.version}). Sending firmware file.`);
+
+        return doFileDownload(firmware.id.toString(), projectId, res);
     }
 
     res.json({
@@ -274,18 +322,15 @@ app.get('/api/v1/firmware/download/:id', authenticate, (req: ExpressRequestWithP
     const {id} = req.params;
     const projectId = req.projectId;
 
-    const stmt = db.prepare('SELECT * FROM firmware WHERE id = ? AND project_id = ?');
-    const firmware = stmt.get(id, projectId) as { file_path: string } | undefined;
-
-    if (!firmware) {
-        return res.status(404).json({error: 'Firmware not found'});
+    if (!projectId) {
+        return res.status(500).json({error: 'Project ID not found in request'});
     }
 
-    res.download(firmware.file_path, err => {
-        if (err) {
-            res.status(500).json({error: 'Error downloading file'});
-        }
-    });
+    if (!id) {
+        return res.status(400).json({error: 'Firmware ID is required'});
+    }
+
+    doFileDownload(id, projectId, res);
 });
 
 // fallback to no content
