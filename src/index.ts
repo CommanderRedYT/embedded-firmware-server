@@ -104,6 +104,7 @@ command
     .option('--delete-firmware <firmware_id>', 'Delete the firmware entry with the specified ID')
     .option('--cleanup-upload-dir', 'Delete all files in the uploads directory that are not referenced in the database')
     .option('--prune-old-firmwares <days>', 'Delete firmware entries older than the specified number of days')
+    .option('--prune-except-latest', 'Keep only the latest firmware entry for each project and device type, delete the rest')
     .description('Firmware Management Server')
     .parse(process.argv);
 
@@ -290,6 +291,46 @@ if (options.pruneOldFirmwares) {
     }
 
     console.log(`Pruned ${deletedCount} firmware entries older than ${days} days.`);
+    process.exit(0);
+}
+
+if (options.pruneExceptLatest) {
+    const getProjectsStmt = db.prepare('SELECT DISTINCT project_id, device_type FROM firmware');
+    const projects = getProjectsStmt.all() as { project_id: string; device_type: string }[];
+
+    const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
+    let deletedCount = 0;
+
+    for (const { project_id, device_type } of projects) {
+        const getFirmwaresStmt = db.prepare(`
+            SELECT id, file_path FROM firmware 
+            WHERE project_id = ? AND device_type = ? 
+            ORDER BY upload_date DESC
+        `);
+        const firmwares = getFirmwaresStmt.all(project_id, device_type) as { id: number; file_path: string }[];
+
+        // Keep the latest one, delete the rest
+        for (let i = 1; i < firmwares.length; i++) {
+            const firmware = firmwares[i];
+
+            if (!firmware) continue;
+
+            const result = delStmt.run(firmware.id);
+            if (result.changes > 0) {
+                // Delete the associated file
+                fs.unlink(firmware.file_path, err => {
+                    if (err) {
+                        console.error('Error deleting firmware file:', err.message);
+                    } else {
+                        console.log(`Deleted firmware file: ${firmware.file_path}`);
+                    }
+                });
+                deletedCount++;
+            }
+        }
+    }
+
+    console.log(`Pruned ${deletedCount} old firmware entries, keeping only the latest for each project and device type.`);
     process.exit(0);
 }
 
