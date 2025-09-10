@@ -215,6 +215,8 @@ app.post('/api/v1/firmware', authenticate, upload.single('firmware'), (req: Expr
     const insert = db.prepare('INSERT INTO firmware (project_id, device_type, version, file_path) VALUES (?, ?, ?, ?)');
     insert.run(projectId, device_type, version, filePath);
 
+    console.log(`Firmware uploaded: Project ID=${projectId}, Device Type=${device_type}, Version=${version}, File Path=${filePath}`);
+
     res.status(201).json({message: 'Firmware uploaded successfully'});
 });
 
