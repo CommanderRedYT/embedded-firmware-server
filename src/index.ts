@@ -245,6 +245,15 @@ app.get('/api/v1/firmware/latest', authenticate, (req: ExpressRequestWithProject
         return res.status(404).json({error: 'No firmware found for the specified project and device type'});
     }
 
+    // This header can be used to check if we need to update. If the version matches, we can send a not-modified response.
+    const xEsp32Version = req.header('X-ESP32-Version');
+
+    // if it exists, directly download the file
+    if (xEsp32Version) {
+        console.log(`Device with version ${xEsp32Version} is downloading firmware ID ${firmware.id}`);
+        return res.redirect(`/api/v1/firmware/download/${firmware.id}`);
+    }
+
     res.json({
         id: firmware.id,
         project_id: firmware.project_id,
