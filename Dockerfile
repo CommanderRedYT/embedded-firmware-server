@@ -18,11 +18,11 @@ COPY ./src ./src
 
 FROM app AS runner
 
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 ARG PORT=3000
 EXPOSE $PORT
 
-ENV HOST 0.0.0.0
+ENV HOST=0.0.0.0
 
 CMD ["yarn", "start"]
