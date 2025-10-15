@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import commander from 'commander';
 import crypto from 'crypto';
 import morgan from 'morgan';
+import packageJson from '../package.json';
 
 /*
  * ==== API Routes ====
@@ -144,6 +145,10 @@ const hasNewerFirmware = (currentHash: string, project_id: string, force_upgrade
 
 // Add command-line option for database reset and creating a new API key
 const command = new commander.Command();
+
+command.name('firmware-server')
+    .description('Firmware Management Server')
+    .version(packageJson.version);
 
 // split flags into commands
 command
@@ -414,7 +419,11 @@ command
         process.exit(0);
     });
 
-command.parse(process.argv);
+if (process.argv.length > 2) {
+    command.parse(process.argv);
+} else {
+    console.log('No command specified, starting server...');
+}
 
 // Middleware to parse JSON bodies
 app.use(express.json());
