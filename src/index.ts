@@ -96,6 +96,8 @@ const setupDatabase = () => {
         console.log('Meta table does not exist, looks like a fresh database.');
     }
 
+    let didSomething = false;
+
     for (let i = currentVersion; i < migrations.length; i++) {
         const migration = migrations[i];
 
@@ -108,9 +110,12 @@ const setupDatabase = () => {
         const setVersionStmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
         setVersionStmt.run('db_version', currentVersion.toString());
         console.log(`Applied migration version ${currentVersion}`);
+        didSomething = true;
     }
 
-    console.log('Database setup complete. Current version:', currentVersion);
+    if (didSomething) {
+        console.log('Database setup complete. Current version:', currentVersion);
+    }
 };
 
 setupDatabase();
