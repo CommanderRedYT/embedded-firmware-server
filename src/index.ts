@@ -43,7 +43,7 @@ if (!fs.existsSync(uploadDir)) {
 const db = new Database(dbPath);
 
 const setupDatabase = () => {
-    db.exec(`
+    /*db.exec(`
         CREATE TABLE IF NOT EXISTS firmware (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT NOT NULL,
@@ -59,7 +59,52 @@ const setupDatabase = () => {
         );
         CREATE INDEX IF NOT EXISTS idx_firmware_project_device ON firmware (project_id, device_type);
         ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS force_upgrade_on_unknown INTEGER DEFAULT 0;
-    `);
+    `);*/
+    const migrations = [
+        `CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );`,
+        `CREATE TABLE IF NOT EXISTS firmware (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            device_type TEXT NOT NULL,
+            version TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );`,
+        `CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL UNIQUE,
+            api_key TEXT NOT NULL UNIQUE
+        );`,
+        `CREATE INDEX IF NOT EXISTS idx_firmware_project_device ON firmware (project_id, device_type);`,
+        `ALTER TABLE api_keys ADD COLUMN force_upgrade_on_unknown INTEGER DEFAULT 0;`
+    ];
+
+    const getVersionStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
+    const setVersionStmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
+
+    let currentVersion = 0;
+    const row = getVersionStmt.get('db_version') as { value: string } | undefined;
+    if (row) {
+        currentVersion = parseInt(row.value, 10);
+    }
+
+    for (let i = currentVersion; i < migrations.length; i++) {
+        const migration = migrations[i];
+
+        if (!migration) continue;
+
+        console.log(`Applying migration version ${i + 1}`);
+
+        db.exec(migration);
+        currentVersion++;
+        setVersionStmt.run('db_version', currentVersion.toString());
+        console.log(`Applied migration version ${currentVersion}`);
+    }
+
+    console.log('Database setup complete. Current version:', currentVersion);
 };
 
 setupDatabase();
