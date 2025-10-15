@@ -129,7 +129,7 @@ const hasNewerFirmware = (currentHash: string, project_id: string, force_upgrade
 
     if (row.count === 0) {
         console.warn('Current firmware hash not found in database for project:', project_id);
-        return false;
+        return force_upgrade_on_unknown;
     }
 
     // Get the hash of the latest firmware
@@ -138,7 +138,7 @@ const hasNewerFirmware = (currentHash: string, project_id: string, force_upgrade
 
     if (!latestRow) {
         console.warn('No firmware found in database for project:', project_id);
-        return force_upgrade_on_unknown;
+        return false;
     }
 
     const isSame = latestRow.version === currentHash;
