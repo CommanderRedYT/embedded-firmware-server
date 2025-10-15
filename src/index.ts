@@ -58,12 +58,13 @@ const setupDatabase = () => {
             api_key TEXT NOT NULL UNIQUE
         );
         CREATE INDEX IF NOT EXISTS idx_firmware_project_device ON firmware (project_id, device_type);
+        ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS force_upgrade_on_unknown INTEGER DEFAULT 0;
     `);
 };
 
 setupDatabase();
 
-const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
+const hasNewerFirmware = (currentHash: string, project_id: string, force_upgrade_on_unknown: boolean): boolean => {
     if (!currentHash) return true;
 
     // if currentHash is not in our database, return false
@@ -81,7 +82,7 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
 
     if (!latestRow) {
         console.warn('No firmware found in database for project:', project_id);
-        return false;
+        return force_upgrade_on_unknown;
     }
 
     const isSame = latestRow.version === currentHash;
@@ -94,227 +95,196 @@ const hasNewerFirmware = (currentHash: string, project_id: string): boolean => {
 // Add command-line option for database reset and creating a new API key
 const command = new commander.Command();
 
+// split flags into commands
 command
-    .option('--reset-db', 'Reset the database (deletes all data)')
-    .option('--create-api-key <project_id>', 'Create a new API key for the specified project ID')
-    .option('--get-api-keys', 'List all API keys')
-    .option('--get-firmware <project_id> <device_type>', 'Get latest firmware for a specific project and device type')
-    .option('--list-firmwares <project_id>', 'List all firmware entries for a specific project')
-    .option('--delete-api-key <project_id>', 'Delete the API key for the specified project ID')
-    .option('--delete-firmware <firmware_id>', 'Delete the firmware entry with the specified ID')
-    .option('--cleanup-upload-dir', 'Delete all files in the uploads directory that are not referenced in the database')
-    .option('--prune-old-firmwares <days>', 'Delete firmware entries older than the specified number of days')
-    .option('--prune-except-latest', 'Keep only the latest firmware entry for each project and device type, delete the rest')
-    .description('Firmware Management Server')
-    .parse(process.argv);
+    .command('reset-db')
+    .description('Reset the database (deletes all data)')
+    .action(() => {
+        db.exec('DROP TABLE IF EXISTS firmware;');
+        setupDatabase();
+        console.log('Database has been reset.');
+        process.exit(0);
+    });
 
-const options = command.opts();
+command
+    .command('create-api-key <project_id>')
+    .option('--force-upgrade-on-unknown', 'Force upgrade on unknown firmware versions', false)
+    .description('Create a new API key for the specified project ID')
+    .action((projectId: string, options: { forceUpgradeOnUnknown: boolean }) => {
+        const apiKey = crypto.randomBytes(16).toString('hex');
 
-if (options.resetDb) {
-    db.exec('DROP TABLE IF EXISTS firmware;');
-    setupDatabase();
-    console.log('Database has been reset.');
-    process.exit(0);
-}
-
-if (options.createApiKey) {
-    const projectId = options.createApiKey;
-    const apiKey = crypto.randomBytes(16).toString('hex');
-
-    const insert = db.prepare('INSERT INTO api_keys (project_id, api_key) VALUES (?, ?)');
-    try {
-        insert.run(projectId, apiKey);
-        console.log(`API key for project "${projectId}": ${apiKey}`);
-    } catch (err) {
-        if (err instanceof Error) {
-            if (err.message.includes('UNIQUE constraint failed: api_keys.project_id')) {
-                console.error(`Project ID "${projectId}" already has an API key.`);
-            } else {
-                console.error('Error creating API key:', err.message);
+        const insert = db.prepare('INSERT INTO api_keys (project_id, api_key, force_upgrade_on_unknown) VALUES (?, ?, ?)');
+        try {
+            insert.run(projectId, apiKey, options.forceUpgradeOnUnknown ? 1 : 0);
+            console.log(`API key for project "${projectId}": ${apiKey}`);
+        } catch (err) {
+            if (err instanceof Error) {
+                if (err.message.includes('UNIQUE constraint failed: api_keys.project_id')) {
+                    console.error(`Project ID "${projectId}" already has an API key.`);
+                } else {
+                    console.error('Error creating API key:', err.message);
+                }
             }
         }
-    }
-    process.exit(0);
-}
+        process.exit(0);
+    });
 
-if (options.getApiKeys) {
-    const stmt = db.prepare('SELECT project_id, api_key FROM api_keys');
-    const rows = stmt.all() as { project_id: string; api_key: string }[];
-    if (rows.length === 0) {
-        console.log('No API keys found.');
-    } else {
-        rows.forEach(row => {
-            console.log(`Project ID: ${row.project_id}, API Key: ${row.api_key}`);
-        });
-    }
-    process.exit(0);
-}
+command
+    .command('get-api-keys')
+    .description('List all API keys')
+    .action(() => {
+        const stmt = db.prepare('SELECT project_id, api_key FROM api_keys');
+        const rows = stmt.all() as { project_id: string; api_key: string }[];
+        if (rows.length === 0) {
+            console.log('No API keys found.');
+        } else {
+            rows.forEach(row => {
+                console.log(`Project ID: ${row.project_id}, API Key: ${row.api_key}`);
+            });
+        }
+        process.exit(0);
+    });
 
-if (options.getFirmware) {
-    const [projectId, deviceType] = options.getFirmware;
-    const stmt = db.prepare(`
+command
+    .command('get-firmware <project_id> <device_type>')
+    .description('Get latest firmware for a specific project and device type')
+    .action((projectId: string, deviceType: string) => {
+        const stmt = db.prepare(`
         SELECT * FROM firmware 
         WHERE project_id = ? AND device_type = ? 
         ORDER BY upload_date DESC 
         LIMIT 1
     `);
-    const firmware = stmt.get(projectId, deviceType) as {
-        id: number;
-        project_id: string;
-        device_type: string;
-        version: string;
-        upload_date: string;
-    } | undefined;
+        const firmware = stmt.get(projectId, deviceType) as {
+            id: number;
+            project_id: string;
+            device_type: string;
+            version: string;
+            upload_date: string;
+        } | undefined;
 
-    if (!firmware) {
-        console.log('No firmware found for the specified project and device type.');
-    } else {
-        console.log(`ID: ${firmware.id}`);
-        console.log(`Project ID: ${firmware.project_id}`);
-        console.log(`Device Type: ${firmware.device_type}`);
-        console.log(`Version: ${firmware.version}`);
-        console.log(`Upload Date: ${firmware.upload_date}`);
-    }
-    process.exit(0);
-}
-
-if (options.listFirmwares) {
-    const projectId = options.listFirmwares;
-    const stmt = db.prepare('SELECT * FROM firmware WHERE project_id = ? ORDER BY upload_date DESC');
-    const firmwares = stmt.all(projectId) as {
-        id: number;
-        project_id: string;
-        device_type: string;
-        version: string;
-        upload_date: string;
-    }[];
-
-    if (firmwares.length === 0) {
-        console.log('No firmware entries found for the specified project.');
-    } else {
-        firmwares.forEach(firmware => {
-            console.log(`ID: ${firmware.id}, Device Type: ${firmware.device_type}, Version: ${firmware.version}, Upload Date: ${firmware.upload_date}`);
-        });
-    }
-    process.exit(0);
-}
-
-if (options.deleteApiKey) {
-    const projectId = options.deleteApiKey;
-    const del = db.prepare('DELETE FROM api_keys WHERE project_id = ?');
-    const result = del.run(projectId);
-    if (result.changes === 0) {
-        console.log(`No API key found for project ID "${projectId}".`);
-    } else {
-        console.log(`API key for project ID "${projectId}" has been deleted.`);
-    }
-    process.exit(0);
-}
-
-if (options.deleteFirmware) {
-    const firmwareId = options.deleteFirmware;
-    const getStmt = db.prepare('SELECT file_path FROM firmware WHERE id = ?');
-    const firmware = getStmt.get(firmwareId) as { file_path: string } | undefined;
-
-    if (!firmware) {
-        console.log(`No firmware entry found with ID "${firmwareId}".`);
-        process.exit(0);
-    }
-
-    const del = db.prepare('DELETE FROM firmware WHERE id = ?');
-    const result = del.run(firmwareId);
-    if (result.changes > 0) {
-        // Delete the associated file
-        fs.unlink(firmware.file_path, err => {
-            if (err) {
-                console.error('Error deleting firmware file:', err.message);
-            } else {
-                console.log('Associated firmware file deleted.');
-            }
-        });
-        console.log(`Firmware entry with ID "${firmwareId}" has been deleted.`);
-    } else {
-        console.log(`No firmware entry found with ID "${firmwareId}".`);
-    }
-    process.exit(0);
-}
-
-if (options.cleanupUploadDir) {
-    const stmt = db.prepare('SELECT file_path FROM firmware');
-    const rows = stmt.all() as { file_path: string }[];
-    const validFiles = new Set(rows.map(row => path.resolve(row.file_path)));
-
-    const files = fs.readdirSync(uploadDir);
-    let deletedCount = 0;
-
-    for (const file of files) {
-        const filePath = path.resolve(path.join(uploadDir, file));
-        if (!validFiles.has(filePath)) {
-            fs.unlinkSync(filePath);
-            console.log(`Deleted unreferenced file: ${filePath}`);
-            deletedCount++;
+        if (!firmware) {
+            console.log('No firmware found for the specified project and device type.');
+        } else {
+            console.log(`ID: ${firmware.id}`);
+            console.log(`Project ID: ${firmware.project_id}`);
+            console.log(`Device Type: ${firmware.device_type}`);
+            console.log(`Version: ${firmware.version}`);
+            console.log(`Upload Date: ${firmware.upload_date}`);
         }
-    }
+        process.exit(0);
+    });
 
-    console.log(`Cleanup complete. Deleted ${deletedCount} unreferenced files.`);
-    process.exit(0);
-}
+command
+    .command('list-firmwares <project_id>')
+    .description('List all firmware entries for a specific project')
+    .action((projectId: string) => {
+        const stmt = db.prepare('SELECT * FROM firmware WHERE project_id = ? ORDER BY upload_date DESC');
+        const firmwares = stmt.all(projectId) as {
+            id: number;
+            project_id: string;
+            device_type: string;
+            version: string;
+            upload_date: string;
+        }[];
 
-if (options.pruneOldFirmwares) {
-    const days = parseInt(options.pruneOldFirmwares);
-    if (isNaN(days) || days <= 0) {
-        console.error('Please provide a valid number of days.');
-        process.exit(1);
-    }
+        if (firmwares.length === 0) {
+            console.log('No firmware entries found for the specified project.');
+        } else {
+            firmwares.forEach(firmware => {
+                console.log(`ID: ${firmware.id}, Device Type: ${firmware.device_type}, Version: ${firmware.version}, Upload Date: ${firmware.upload_date}`);
+            });
+        }
+        process.exit(0);
+    });
 
-    const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+command
+    .command('delete-api-key <project_id>')
+    .description('Delete the API key for the specified project ID')
+    .action((projectId: string) => {
+        const del = db.prepare('DELETE FROM api_keys WHERE project_id = ?');
+        const result = del.run(projectId);
+        if (result.changes === 0) {
+            console.log(`No API key found for project ID "${projectId}".`);
+        } else {
+            console.log(`API key for project ID "${projectId}" has been deleted.`);
+        }
+        process.exit(0);
+    });
 
-    const getStmt = db.prepare('SELECT id, file_path FROM firmware WHERE upload_date < ?');
-    const oldFirmwares = getStmt.all(cutoffDate) as { id: number; file_path: string }[];
+command
+    .command('delete-firmware <firmware_id>')
+    .description('Delete the firmware entry with the specified ID')
+    .action((firmwareId: string) => {
+        const getStmt = db.prepare('SELECT file_path FROM firmware WHERE id = ?');
+        const firmware = getStmt.get(firmwareId) as { file_path: string } | undefined;
 
-    const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
-    let deletedCount = 0;
+        if (!firmware) {
+            console.log(`No firmware entry found with ID "${firmwareId}".`);
+            process.exit(0);
+        }
 
-    for (const firmware of oldFirmwares) {
-        const result = delStmt.run(firmware.id);
+        const del = db.prepare('DELETE FROM firmware WHERE id = ?');
+        const result = del.run(firmwareId);
         if (result.changes > 0) {
             // Delete the associated file
             fs.unlink(firmware.file_path, err => {
                 if (err) {
                     console.error('Error deleting firmware file:', err.message);
                 } else {
-                    console.log(`Deleted firmware file: ${firmware.file_path}`);
+                    console.log('Associated firmware file deleted.');
                 }
             });
-            deletedCount++;
+            console.log(`Firmware entry with ID "${firmwareId}" has been deleted.`);
+        } else {
+            console.log(`No firmware entry found with ID "${firmwareId}".`);
         }
-    }
+        process.exit(0);
+    });
 
-    console.log(`Pruned ${deletedCount} firmware entries older than ${days} days.`);
-    process.exit(0);
-}
+command
+    .command('cleanup-upload-dir')
+    .description('Delete all files in the uploads directory that are not referenced in the database')
+    .action(() => {
+        const stmt = db.prepare('SELECT file_path FROM firmware');
+        const rows = stmt.all() as { file_path: string }[];
+        const validFiles = new Set(rows.map(row => path.resolve(row.file_path)));
 
-if (options.pruneExceptLatest) {
-    const getProjectsStmt = db.prepare('SELECT DISTINCT project_id, device_type FROM firmware');
-    const projects = getProjectsStmt.all() as { project_id: string; device_type: string }[];
+        const files = fs.readdirSync(uploadDir);
+        let deletedCount = 0;
 
-    const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
-    let deletedCount = 0;
+        for (const file of files) {
+            const filePath = path.resolve(path.join(uploadDir, file));
+            if (!validFiles.has(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`Deleted unreferenced file: ${filePath}`);
+                deletedCount++;
+            }
+        }
 
-    for (const { project_id, device_type } of projects) {
-        const getFirmwaresStmt = db.prepare(`
-            SELECT id, file_path FROM firmware 
-            WHERE project_id = ? AND device_type = ? 
-            ORDER BY upload_date DESC
-        `);
-        const firmwares = getFirmwaresStmt.all(project_id, device_type) as { id: number; file_path: string }[];
+        console.log(`Cleanup complete. Deleted ${deletedCount} unreferenced files.`);
+        process.exit(0);
+    });
 
-        // Keep the latest one, delete the rest
-        for (let i = 1; i < firmwares.length; i++) {
-            const firmware = firmwares[i];
+command
+    .command('prune-old-firmwares <days>')
+    .description('Delete firmware entries older than the specified number of days')
+    .action((daysString: string) => {
+        const days = parseInt(daysString, 10);
+        if (isNaN(days) || days <= 0) {
+            console.error('Please provide a valid number of days.');
+            process.exit(1);
+        }
 
-            if (!firmware) continue;
+        const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
+        const getStmt = db.prepare('SELECT id, file_path FROM firmware WHERE upload_date < ?');
+        const oldFirmwares = getStmt.all(cutoffDate) as { id: number; file_path: string }[];
+
+        const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
+        let deletedCount = 0;
+
+        for (const firmware of oldFirmwares) {
             const result = delStmt.run(firmware.id);
             if (result.changes > 0) {
                 // Delete the associated file
@@ -328,11 +298,73 @@ if (options.pruneExceptLatest) {
                 deletedCount++;
             }
         }
-    }
 
-    console.log(`Pruned ${deletedCount} old firmware entries, keeping only the latest for each project and device type.`);
-    process.exit(0);
-}
+        console.log(`Pruned ${deletedCount} firmware entries older than ${days} days.`);
+        process.exit(0);
+    });
+
+command
+    .command('prune-except-latest')
+    .description('Keep only the latest firmware entry for each project and device type, delete the rest')
+    .action(() => {
+        const getProjectsStmt = db.prepare('SELECT DISTINCT project_id, device_type FROM firmware');
+        const projects = getProjectsStmt.all() as { project_id: string; device_type: string }[];
+
+        const delStmt = db.prepare('DELETE FROM firmware WHERE id = ?');
+        let deletedCount = 0;
+
+        for (const { project_id, device_type } of projects) {
+            const getFirmwaresStmt = db.prepare(`
+            SELECT id, file_path FROM firmware 
+            WHERE project_id = ? AND device_type = ? 
+            ORDER BY upload_date DESC
+        `);
+            const firmwares = getFirmwaresStmt.all(project_id, device_type) as { id: number; file_path: string }[];
+
+            // Keep the latest one, delete the rest
+            for (let i = 1; i < firmwares.length; i++) {
+                const firmware = firmwares[i];
+
+                if (!firmware) continue;
+
+                const result = delStmt.run(firmware.id);
+                if (result.changes > 0) {
+                    // Delete the associated file
+                    fs.unlink(firmware.file_path, err => {
+                        if (err) {
+                            console.error('Error deleting firmware file:', err.message);
+                        } else {
+                            console.log(`Deleted firmware file: ${firmware.file_path}`);
+                        }
+                    });
+                    deletedCount++;
+                }
+            }
+        }
+
+        console.log(`Pruned ${deletedCount} old firmware entries, keeping only the latest for each project and device type.`);
+        process.exit(0);
+    });
+
+// command to edit projects options like force_upgrade_on_unknown
+command
+    .command('set-force-upgrade <project_id> <value>')
+    .description('Set force_upgrade_on_unknown option for a specific project (true/false)')
+    .action((projectId: string, value: string) => {
+        const boolValue = value.toLowerCase() === 'true' ? 1 : 0;
+
+        const updateStmt = db.prepare('UPDATE api_keys SET force_upgrade_on_unknown = ? WHERE project_id = ?');
+        const result = updateStmt.run(boolValue, projectId);
+
+        if (result.changes === 0) {
+            console.log(`No project found with ID "${projectId}".`);
+        } else {
+            console.log(`Set force_upgrade_on_unknown to ${boolValue} for project ID "${projectId}".`);
+        }
+        process.exit(0);
+    });
+
+command.parse(process.argv);
 
 // Middleware to parse JSON bodies
 app.use(express.json());
@@ -436,13 +468,17 @@ app.get('/api/v1/firmware/latest', authenticate, (req: ExpressRequestWithProject
         return res.status(404).json({error: 'No firmware found for the specified project and device type'});
     }
 
+    const projectStmt = db.prepare('SELECT force_upgrade_on_unknown FROM api_keys WHERE project_id = ?');
+    const projectRow = projectStmt.get(projectId) as { force_upgrade_on_unknown: number } | undefined;
+    const force_upgrade_on_unknown = projectRow ? projectRow.force_upgrade_on_unknown === 1 : false;
+
     // This header can be used to check if we need to update. If the version matches, we can send a not-modified response.
     const xEsp32Version = req.header('X-ESP32-Version');
 
     // if it exists, directly download the file
     if (xEsp32Version) {
         console.log(`Device with version ${xEsp32Version} is downloading firmware ID ${firmware.id}`);
-        const isNewer = hasNewerFirmware(xEsp32Version, projectId);
+        const isNewer = hasNewerFirmware(xEsp32Version, projectId, force_upgrade_on_unknown);
         if (!isNewer) {
             console.log(`Device firmware is up to date (version: ${xEsp32Version}). Sending 304 Not Modified.`);
             return res.status(304).end();
