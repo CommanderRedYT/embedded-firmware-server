@@ -64,7 +64,8 @@ const setupDatabase = () => {
         `CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        );`,
+        );
+        INSERT OR IGNORE INTO meta (key, value) VALUES ('db_version', '0');`,
         `CREATE TABLE IF NOT EXISTS firmware (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT NOT NULL,
@@ -82,14 +83,18 @@ const setupDatabase = () => {
         `ALTER TABLE api_keys ADD COLUMN force_upgrade_on_unknown INTEGER DEFAULT 0;`
     ];
 
-    const getVersionStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
-    const setVersionStmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
-
     let currentVersion = 0;
-    const row = getVersionStmt.get('db_version') as { value: string } | undefined;
-    if (row) {
-        currentVersion = parseInt(row.value, 10);
+
+    try {
+        const getVersionStmt = db.prepare('SELECT value FROM meta WHERE key = ?');
+        const row = getVersionStmt.get('db_version') as { value: string } | undefined;
+        if (row) {
+            currentVersion = parseInt(row.value, 10);
+        }
+    } catch {
+        console.log('Meta table does not exist, looks like a fresh database.');
     }
+    const setVersionStmt = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)');
 
     for (let i = currentVersion; i < migrations.length; i++) {
         const migration = migrations[i];
